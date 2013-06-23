@@ -3,6 +3,7 @@ package biz.itcf.nsmtp;
 import org.apache.mina.core.service.IoHandler;
 import org.apache.mina.filter.codec.ProtocolCodecFilter;
 import org.apache.mina.filter.codec.textline.TextLineCodecFactory;
+import org.apache.mina.filter.ssl.SslFilter;
 import org.apache.mina.transport.socket.nio.NioSocketAcceptor;
 
 import javax.net.ssl.SSLContext;
@@ -24,11 +25,14 @@ public class NoopSMTP implements Stoppable {
     public static final int DEFAULT_SMTP_SERVER_PORT = 9025;
     public static final int DEFAULT_CONTROL_SERVER_PORT = 9026;
 
-    public static void main(String [] args) throws IOException, InterruptedException {
+    public static void main(String [] args) throws Exception {
         String host = null;
         int port = DEFAULT_SMTP_SERVER_PORT;
+        boolean ssl = false;
+
         String controlHost = null;
         int controlPort = DEFAULT_CONTROL_SERVER_PORT;
+        boolean controlSsl = false;
 
         boolean printUsage = false;
 
@@ -43,6 +47,8 @@ public class NoopSMTP implements Stoppable {
                 } catch (NumberFormatException e) {
                     printUsage = true;
                 }
+            } else if (arg.equals("-s")) {
+                ssl = true;
             } else if (arg.startsWith("-ch")) {
                 controlHost = arg.substring(3);
             } else if (arg.startsWith("-cp")) {
@@ -51,6 +57,10 @@ public class NoopSMTP implements Stoppable {
                 } catch (NumberFormatException e) {
                     printUsage = true;
                 }
+            } else if (arg.equals("-cs")) {
+                controlSsl = true;
+            } else {
+                printUsage = true;
             }
         }
 
@@ -61,11 +71,24 @@ public class NoopSMTP implements Stoppable {
             System.err.println("-?      Show this help.");
             System.err.println("-hHOST  Hostname or IP to bind SMTP Server to. Defaults to all available addresses.");
             System.err.println("-pPORT  Port number to bind SMTP Server to. Defaults to " + DEFAULT_SMTP_SERVER_PORT + ".");
+            System.err.println("-s      Enabled SSL for SMTP Server.");
             System.err.println("-chHOST Hostname or IP to bind Control Server to. Defaults to all available addresses.");
             System.err.println("-cpPORT Port number to bind Control Server to. Defaults to " + DEFAULT_CONTROL_SERVER_PORT + ".");
+            System.err.println("-cs     Enabled SSL for Control Server.");
             System.exit(1);
         } else {
-            NoopSMTP smtp = new NoopSMTP(host, port, controlHost, controlPort);
+            SSLContext sslContext = null;
+
+            if (ssl) {
+                sslContext = new SSLContextBuilder().build();
+            }
+
+            SSLContext controlSslContext = null;
+            if (controlSsl) {
+                controlSslContext = new SSLContextBuilder().build();
+            }
+
+            NoopSMTP smtp = new NoopSMTP(host, port, sslContext, controlHost, controlPort, controlSslContext);
 
             smtp.start();
         }
@@ -76,10 +99,9 @@ public class NoopSMTP implements Stoppable {
     private LineBasedServer smtpServer;
     private LineBasedServer controlServer;
 
-    public NoopSMTP(String host, int port, String controlHost, int controlPort)
-    {
-        this.smtpServer = new LineBasedServer(new SMTPHandler(), host, port, "ASCII");
-        this.controlServer = new LineBasedServer(new ControlHandler(this), controlHost, controlPort, "UTF-8");
+    public NoopSMTP(String host, int port, SSLContext smtpSslContext, String controlHost, int controlPort, SSLContext controlSslContext) {
+        this.smtpServer = new LineBasedServer(new SMTPHandler(), host, port, smtpSslContext, "ASCII");
+        this.controlServer = new LineBasedServer(new ControlHandler(this), controlHost, controlPort, controlSslContext, "UTF-8");
     }
 
     public void start() throws IOException {
@@ -134,8 +156,13 @@ public class NoopSMTP implements Stoppable {
         private NioSocketAcceptor acceptor;
         private InetSocketAddress address;
 
-        public LineBasedServer(IoHandler handler, String host, int port, String charset) {
+        public LineBasedServer(IoHandler handler, String host, int port, SSLContext sslContext, String charset) {
             acceptor = new NioSocketAcceptor();
+
+            if (sslContext != null) {
+                acceptor.getFilterChain().addLast("ssl", new SslFilter(sslContext));
+            }
+
             acceptor.getFilterChain().addLast("codec",
                     new ProtocolCodecFilter(new TextLineCodecFactory(Charset.forName(charset), "\r\n", "\r\n")));
             acceptor.setHandler(handler);
